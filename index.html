@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Organica 音楽ゲーム譜面エディター</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', 'Noto Sans JP', sans-serif;
+            overscroll-behavior: none; /* スクロール連鎖を防止 */
+        }
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        #chart-editor {
+            display: block;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200 flex flex-col h-screen overflow-hidden">
+
+    <!-- ヘッダー: コントロールパネル -->
+    <header class="bg-gray-800 shadow-lg z-10">
+        <div class="container mx-auto px-4 py-3">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+                <!-- 曲情報 -->
+                <div class="flex flex-col space-y-2">
+                    <h1 class="text-xl font-bold text-white">Organica 譜面エディター</h1>
+                    <div class="flex items-center space-x-2">
+                        <label for="title" class="text-sm font-medium whitespace-nowrap">曲名:</label>
+                        <input type="text" id="title" value="test" class="bg-gray-700 text-white text-sm rounded-md px-2 py-1 w-full focus:outline-none focus:ring-2 focus:ring-sky-500">
+                    </div>
+                </div>
+
+                <!-- 再生コントロール -->
+                <div class="flex flex-col justify-center items-center space-y-2">
+                    <div class="flex items-center space-x-3">
+                        <input type="file" id="audio-file" class="hidden">
+                        <button id="load-audio-btn" class="bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-4 rounded-md transition-colors">
+                            曲を読み込む
+                        </button>
+                        <button id="play-pause-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md transition-colors w-24" disabled>再生</button>
+                    </div>
+                    <div class="w-full max-w-xs">
+                            <input type="range" id="seek-bar" value="0" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer" disabled>
+                            <div id="current-time" class="text-center text-sm mt-1">0.00 / 0.00</div>
+                    </div>
+                </div>
+
+                <!-- 設定と保存 -->
+                <div class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                    <div class="flex items-center space-x-2">
+                        <label for="bpm" class="font-medium whitespace-nowrap">BPM:</label>
+                        <input type="number" id="bpm" value="120.0" step="0.1" class="bg-gray-700 text-white rounded-md px-2 py-1 w-full focus:outline-none focus:ring-2 focus:ring-sky-500">
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <label for="tpb" class="font-medium whitespace-nowrap">TPB:</label>
+                        <input type="number" id="tpb" value="960" class="bg-gray-700 text-white rounded-md px-2 py-1 w-full focus:outline-none focus:ring-2 focus:ring-sky-500">
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <label for="offset" class="font-medium whitespace-nowrap">Offset:</label>
+                        <input type="number" id="offset" value="0" step="0.01" class="bg-gray-700 text-white rounded-md px-2 py-1 w-full focus:outline-none focus:ring-2 focus:ring-sky-500">
+                    </div>
+                    <div class="col-span-2 flex space-x-2">
+                        <input type="file" id="import-json-file" class="hidden" accept=".json">
+                        <button id="import-json-btn" class="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-md transition-colors">
+                            読み込み
+                        </button>
+                        <button id="export-json-btn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-md transition-colors">
+                            保存
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- ヘッダーの後、mainタグの前のコードを以下のように変更 -->
+    <div class="bg-gray-800 border-t border-gray-700">
+        <button id="toggle-stats" class="w-full px-4 py-2 text-left text-sm font-medium hover:bg-gray-700 focus:outline-none flex items-center justify-between">
+            <span>統計情報</span>
+            <svg id="stats-arrow" class="w-5 h-5 transform transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+            </svg>
+        </button>
+        <div id="stats-panel" class="hidden p-4">
+            <div class="container mx-auto">
+                <div class="grid grid-cols-4 gap-4 text-sm">
+                    <div class="bg-gray-700 rounded-lg p-3">
+                        <h3 class="font-bold text-sky-400 mb-1">ノーマルノーツ</h3>
+                        <div id="normal-stats">
+                            <div>総数: <span id="normal-count">0</span></div>
+                            <div>レーン分布: <span id="normal-lane-dist">-</span></div>
+                        </div>
+                    </div>
+                    <div class="bg-gray-700 rounded-lg p-3">
+                        <h3 class="font-bold text-amber-400 mb-1">クリティカルノーツ</h3>
+                        <div id="critical-stats">
+                            <div>総数: <span id="critical-count">0</span></div>
+                            <div>レーン分布: <span id="critical-lane-dist">-</span></div>
+                        </div>
+                    </div>
+                    <div class="bg-gray-700 rounded-lg p-3">
+                        <h3 class="font-bold text-green-400 mb-1">ロングノーツ</h3>
+                        <div id="long-stats">
+                            <div>総数: <span id="long-count">0</span></div>
+                            <div>平均長さ: <span id="long-avg-length">0</span> Ticks</div>
+                            <div>レーン分布: <span id="long-lane-dist">-</span></div>
+                        </div>
+                    </div>
+                    <div class="bg-gray-700 rounded-lg p-3">
+                        <h3 class="font-bold text-purple-400 mb-1">BPM変化</h3>
+                        <div id="bpm-stats">
+                            <div>総数: <span id="bpm-count">0</span></div>
+                            <div>最小BPM: <span id="min-bpm">-</span></div>
+                            <div>最大BPM: <span id="max-bpm">-</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- メイン: エディター領域 -->
+    <main class="flex-grow bg-gray-900 relative overflow-hidden">
+        <div id="editor-container" class="h-full w-full no-scrollbar overflow-auto">
+            <canvas id="chart-editor" class="bg-gray-800"></canvas>
+        </div>
+        <div class="absolute top-2 left-2 bg-gray-900 bg-opacity-70 p-2 rounded-md text-sm">
+            <div>Tick: <span id="current-tick">0</span></div>
+            <div>Grid: <span id="current-grid">1/4</span></div>
+        </div>
+    </main>
+
+    <audio id="audio-player"></audio>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    // DOM要素の取得
+    const canvas = document.getElementById('chart-editor');
+    const ctx = canvas.getContext('2d');
+    const editorContainer = document.getElementById('editor-container');
+
+    const titleInput = document.getElementById('title');
+    const bpmInput = document.getElementById('bpm');
+    const tpbInput = document.getElementById('tpb');
+    const offsetInput = document.getElementById('offset');
+
+    const audioPlayer = document.getElementById('audio-player');
+    const loadAudioBtn = document.getElementById('load-audio-btn');
+    const audioFileInput = document.getElementById('audio-file');
+    const playPauseBtn = document.getElementById('play-pause-btn');
+    const seekBar = document.getElementById('seek-bar');
+    const currentTimeDisplay = document.getElementById('current-time');
+    const currentTickDisplay = document.getElementById('current-tick');
+    const currentGridDisplay = document.getElementById('current-grid');
+    const exportJsonBtn = document.getElementById('export-json-btn');
+    const importJsonBtn = document.getElementById('import-json-btn');
+    const importJsonFileInput = document.getElementById('import-json-file');
+
+    // --- 譜面データとエディタの状態 ---
+    let chartData = {
+        version: 1,
+        title: 'Untitled',
+        bpm: 120.0,
+        tpb: 960, // Ticks Per Beat
+        offset: 0,
+        notes: [] // Notes and BPM changes will be stored here
+    };
+
+    const NOTE_TYPES = {
+        NORMAL: 'normal',
+        CRITICAL: 'critical',
+        LONG: 'long',
+        _BPM: '_bpm' // BPM change event type
+    };
+    
+    const LANES = 7;
+    const JUDGEMENT_LINE_OFFSET = 30;
+    let laneWidth = 0;
+    let pixelsPerTick = 0.05;
+    const tickTolerance = 50; // ノーツ選択時の許容Tick差
+
+    let isPlaying = false;
+    let isDragging = false;
+    let dragStartPos = null;
+    let currentMousePos = null;
+
+    let gridDivisions = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32];
+    let gridIndex = 3; // 初期値 1/4
+
+    // --- 初期化処理 ---
+    function initialize() {
+        resizeCanvas();
+        addEventListeners();
+        updateChartDataFromUI();
+        // Scroll to the bottom (start of the song)
+        editorContainer.scrollTop = editorContainer.scrollHeight - editorContainer.clientHeight;
+        draw(); //描画ループを開始
+
+        updateStats(); // 統計情報の初期更新
+    }
+
+    function resizeCanvas() {
+        const dpr = window.devicePixelRatio || 1;
+        const containerRect = editorContainer.getBoundingClientRect(); 
+
+        const duration = audioPlayer.duration || 300; // default 5 minutes if no audio
+        const totalTicks = timeToTicks(duration);
+        const scoreHeight = totalTicks * pixelsPerTick;
+
+        const paddingTop = JUDGEMENT_LINE_OFFSET;
+        const paddingBottom = containerRect.height - JUDGEMENT_LINE_OFFSET;
+        const totalPixelHeight = paddingTop + scoreHeight + paddingBottom;
+
+        // Reset transform before resizing to avoid stacked scales
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+        // Set canvas drawing buffer size
+        canvas.width = containerRect.width * dpr;
+        canvas.height = totalPixelHeight * dpr;
+
+        // Set canvas CSS size
+        canvas.style.width = `${containerRect.width}px`;
+        canvas.style.height = `${totalPixelHeight}px`;
+
+        // Apply scaling for high-DPI displays
+        ctx.scale(dpr, dpr);
+
+        // Update lane width
+        laneWidth = containerRect.width / LANES;
+    }
+
+    // --- イベントリスナー ---
+    function addEventListeners() {
+        window.addEventListener('resize', resizeCanvas);
+
+        // UI操作
+        titleInput.addEventListener('change', updateChartDataFromUI);
+        bpmInput.addEventListener('change', updateChartDataFromUI);
+        tpbInput.addEventListener('change', updateChartDataFromUI);
+        offsetInput.addEventListener('change', updateChartDataFromUI);
+        exportJsonBtn.addEventListener('click', exportChartAsJSON);
+        importJsonBtn.addEventListener('click', () => importJsonFileInput.click());
+        importJsonFileInput.addEventListener('change', importChartFromJSON);
+
+        // 音声操作
+        loadAudioBtn.addEventListener('click', () => audioFileInput.click());
+        audioFileInput.addEventListener('change', loadAudio);
+        playPauseBtn.addEventListener('click', togglePlayback);
+        seekBar.addEventListener('input', () => {
+            if (!audioPlayer.src) return;
+            // Stop programmatic scrolling while user is seeking
+            const wasPlaying = isPlaying;
+            if (wasPlaying) audioPlayer.pause();
+            audioPlayer.currentTime = seekBar.value;
+            if (wasPlaying) audioPlayer.play();
+        });
+        audioPlayer.addEventListener('timeupdate', updateOnTimeUpdate);
+        audioPlayer.addEventListener('loadedmetadata', () => {
+             seekBar.max = audioPlayer.duration;
+             playPauseBtn.disabled = false;
+             seekBar.disabled = false;
+             resizeCanvas(); // Recalculate height with actual audio duration
+             editorContainer.scrollTop = editorContainer.scrollHeight - editorContainer.clientHeight;
+        });
+        audioPlayer.addEventListener('ended', () => {
+            isPlaying = false;
+            playPauseBtn.textContent = '再生';
+        });
+
+        // エディター操作
+        canvas.addEventListener('mousedown', handleMouseDown);
+        canvas.addEventListener('mousemove', handleMouseMove);
+        canvas.addEventListener('mouseup', handleMouseUp);
+        canvas.addEventListener('mouseleave', handleMouseLeave);
+        editorContainer.addEventListener('wheel', handleWheel, { passive: false });
+        
+        // キーボード操作 (グリッド変更)
+        window.addEventListener('keydown', handleKeyDown);
+
+        // 統計情報パネルの折りたたみ機能
+        const toggleStats = document.getElementById('toggle-stats');
+        const statsPanel = document.getElementById('stats-panel');
+        const statsArrow = document.getElementById('stats-arrow');
+        
+        toggleStats.addEventListener('click', () => {
+            statsPanel.classList.toggle('hidden');
+            statsArrow.classList.toggle('rotate-180');
+            
+            // パネルが表示された時に統計を更新
+            if (!statsPanel.classList.contains('hidden')) {
+                updateStats();
+            }
+        });
+    }
+    
+    // --- 座標計算ヘルパー ---
+    function tickToY(tick) {
+        // This function is now more complex due to BPM changes.
+        // For drawing purposes, we need a simplified approach that's fast.
+        // We'll calculate total height based on an "average" BPM feel for now.
+        // The real conversion logic is in ticksToTime and timeToTicks.
+        const duration = audioPlayer.duration || 300;
+        const totalTicks = timeToTicks(duration);
+        if (totalTicks === 0) return 0; // Avoid division by zero
+        
+        const totalPixelHeight = canvas.height / (window.devicePixelRatio || 1);
+        const scoreHeight = totalPixelHeight - JUDGEMENT_LINE_OFFSET - (editorContainer.clientHeight - JUDGEMENT_LINE_OFFSET);
+        
+        return totalPixelHeight - (editorContainer.clientHeight - JUDGEMENT_LINE_OFFSET) - (tick / totalTicks) * scoreHeight;
+    }
+
+    function yToTick(y) {
+        const duration = audioPlayer.duration || 300;
+        const totalTicks = timeToTicks(duration);
+        if (totalTicks === 0) return 0;
+
+        const totalPixelHeight = canvas.height / (window.devicePixelRatio || 1);
+        const scoreHeight = totalPixelHeight - JUDGEMENT_LINE_OFFSET - (editorContainer.clientHeight - JUDGEMENT_LINE_OFFSET);
+        
+        // キャンバスの一番上からの相対位置を計算
+        const yRelative = y;
+        
+        // 判定線からの距離を計算し、それをtickに変換
+        return totalTicks * (1 - (yRelative - JUDGEMENT_LINE_OFFSET) / scoreHeight);
+    }
+
+    // --- 描画処理 ---
+    function draw() {
+        if (isPlaying) {
+            const currentTick = timeToTicks(audioPlayer.currentTime);
+            const targetY = tickToY(currentTick);
+            const targetScrollTop = targetY - (editorContainer.clientHeight - JUDGEMENT_LINE_OFFSET);
+            const lerpFactor = 0.2; 
+            editorContainer.scrollTop += (targetScrollTop - editorContainer.scrollTop) * lerpFactor;
+        }
+
+        const { width, height } = canvas.getBoundingClientRect();
+        ctx.clearRect(0, 0, width, height);
+        drawGridLines(width);
+        drawLanes(width, height);
+        drawNotesAndEvents();
+        if (isDragging && dragStartPos && currentMousePos) {
+            drawLongNotePreview();
+        }
+        ctx.fillStyle = 'rgba(255, 100, 100, 0.8)';
+        ctx.fillRect(0, editorContainer.scrollTop + editorContainer.clientHeight - JUDGEMENT_LINE_OFFSET, width, 3);
+        requestAnimationFrame(draw);
+    }
+
+    function drawLanes(width, height) {
+        ctx.strokeStyle = '#4A5568';
+        ctx.lineWidth = 1;
+        for (let i = 1; i < LANES; i++) {
+            ctx.beginPath();
+            ctx.moveTo(i * laneWidth, 0);
+            ctx.lineTo(i * laneWidth, height);
+            ctx.stroke();
+        }
+    }
+
+    function drawGridLines(width) {
+        const { tpb } = chartData;
+        const topY = editorContainer.scrollTop;
+        const bottomY = topY + editorContainer.clientHeight;
+        const startTick = yToTick(bottomY);
+        const endTick = yToTick(topY);
+
+        const beats = [];
+        let currentTime = 0;
+        let currentTick = 0;
+        
+        // This is a simplified grid drawing that doesn't perfectly account for BPM changes
+        // A full implementation would be more complex, iterating through BPM changes.
+        const duration = audioPlayer.duration || 300;
+        const totalTicks = timeToTicks(duration);
+        
+        const ticksPerBeat = tpb;
+        const firstBeatTick = Math.floor(startTick / ticksPerBeat) * ticksPerBeat;
+        
+        for (let bTick = firstBeatTick; bTick < endTick; bTick += ticksPerBeat) {
+             if (bTick < 0) continue;
+             const y = tickToY(bTick);
+             const isMeasureLine = (bTick % (tpb * 4)) === 0;
+
+             ctx.strokeStyle = isMeasureLine ? 'rgba(255, 255, 255, 0.4)' : 'rgba(255, 255, 255, 0.2)';
+             ctx.lineWidth = isMeasureLine ? 2 : 1;
+             ctx.beginPath();
+             ctx.moveTo(0, y);
+             ctx.lineTo(width, y);
+             ctx.stroke();
+        }
+    }
+
+    function drawNotesAndEvents() {
+        const noteHeight = 8;
+        const viewTop = editorContainer.scrollTop;
+        const viewBottom = viewTop + editorContainer.clientHeight;
+        const width = canvas.getBoundingClientRect().width;
+
+        chartData.notes.forEach(event => {
+            const renderY = tickToY(event.tick);
+
+            // Culling
+            const eventTop = event.type === NOTE_TYPES.LONG ? tickToY(event.tick + event.duration) : renderY - noteHeight / 2;
+            const eventBottom = renderY + noteHeight / 2;
+            if (eventBottom < viewTop || eventTop > viewBottom) return;
+
+            switch (event.type) {
+                case NOTE_TYPES.NORMAL:
+                    ctx.fillStyle = '#3B82F6';
+                    ctx.fillRect(event.lane * laneWidth, renderY - noteHeight / 2, laneWidth, noteHeight);
+                    break;
+                case NOTE_TYPES.CRITICAL:
+                    ctx.fillStyle = '#F59E0B';
+                    ctx.fillRect(event.lane * laneWidth, renderY - noteHeight / 2, laneWidth, noteHeight);
+                    break;
+                case NOTE_TYPES.LONG:
+                    const startY = tickToY(event.tick);
+                    const endY = tickToY(event.tick + event.duration);
+                    ctx.fillStyle = 'rgba(22, 163, 74, 0.6)';
+                    ctx.fillRect(event.lane * laneWidth + laneWidth * 0.1, endY, laneWidth * 0.8, startY - endY);
+                    ctx.fillStyle = '#16A34A';
+                    ctx.fillRect(event.lane * laneWidth, startY - noteHeight / 2, laneWidth, noteHeight);
+                    ctx.fillRect(event.lane * laneWidth, endY - noteHeight / 2, laneWidth, noteHeight);
+                    break;
+                case NOTE_TYPES._BPM:
+                    ctx.strokeStyle = '#A855F7'; // purple-500
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(0, renderY);
+                    ctx.lineTo(width, renderY);
+                    ctx.stroke();
+                    ctx.fillStyle = '#D8B4FE'; // purple-300
+                    ctx.font = '14px Inter';
+                    ctx.textAlign = 'left';
+                    ctx.fillText(`BPM: ${event.bpm.toFixed(2)}`, 5, renderY - 5);
+                    break;
+            }
+        });
+    }
+
+    function drawLongNotePreview() {
+        const startTick = dragStartPos.tick;
+        const endTick = snapToGrid(getTickFromY(currentMousePos.y));
+        const duration = Math.abs(endTick - startTick);
+        const finalTick = Math.min(startTick, endTick);
+        const x = dragStartPos.lane * laneWidth;
+        const startY = tickToY(finalTick);
+        const endY = tickToY(finalTick + duration);
+        ctx.fillStyle = 'rgba(22, 163, 74, 0.4)';
+        ctx.fillRect(x, endY, laneWidth, startY - endY);
+    }
+    
+    // --- イベントハンドラ ---
+    function handleMouseDown(e) {
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        const pos = {
+            x: mouseX,
+            y: mouseY,
+            lane: getLaneFromX(mouseX),
+            tick: snapToGrid(getTickFromY(mouseY))
+        };
+        
+        if (e.shiftKey) {
+            handleAddBpmEvent(pos);
+            return;
+        }
+
+        isDragging = true;
+        dragStartPos = pos;
+    }
+    
+    function handleMouseMove(e) {
+        if (!isDragging) return;
+        const rect = canvas.getBoundingClientRect();
+        currentMousePos = {
+            x: e.clientX - rect.left,
+            y: e.clientY - rect.top,
+        };
+    }
+    
+    function handleMouseUp(e) {
+        if (!isDragging) return;
+        const mouseX = e.clientX - canvas.getBoundingClientRect().left;
+        const mouseY = e.clientY - canvas.getBoundingClientRect().top;
+        const distanceMoved = Math.hypot(mouseX - dragStartPos.x, mouseY - dragStartPos.y);
+        if (distanceMoved < 5) {
+            handleNoteClick(dragStartPos);
+        } else {
+            handleNoteDrag(dragStartPos, {x: mouseX, y: mouseY});
+        }
+        isDragging = false;
+        dragStartPos = null;
+        currentMousePos = null;
+    }
+
+    function handleMouseLeave() {
+        isDragging = false;
+        dragStartPos = null;
+        currentMousePos = null;
+    }
+    
+    function handleNoteClick(pos) {
+        const clickedLane = pos.lane;
+        const clickedTick = pos.tick;
+
+        const existingEvent = findEventAt(clickedLane, clickedTick);
+
+        if (existingEvent) {
+            if (existingEvent.type === NOTE_TYPES.NORMAL) {
+                existingEvent.type = NOTE_TYPES.CRITICAL;
+            } else { 
+                chartData.notes = chartData.notes.filter(event => event !== existingEvent);
+            }
+        } else {
+            chartData.notes.push({
+                lane: clickedLane,
+                tick: clickedTick,
+                type: NOTE_TYPES.NORMAL
+            });
+        }
+        sortEvents();
+        updateStats(); // 統計更新
+    }
+
+    function handleAddBpmEvent(pos) {
+        const newBpmStr = prompt('新しいBPM値を入力してください:', '120.0');
+        const newBpm = parseFloat(newBpmStr);
+
+        if (!isNaN(newBpm) && newBpm > 0) {
+            // Remove any existing BPM event at the same tick
+            chartData.notes = chartData.notes.filter(e => !(e.type === NOTE_TYPES._BPM && e.tick === pos.tick));
+            
+            chartData.notes.push({
+                type: NOTE_TYPES._BPM,
+                tick: pos.tick,
+                bpm: newBpm
+            });
+            sortEvents();
+            updateStats(); // 統計更新
+        } else {
+            alert('無効なBPM値です。');
+        }
+    }
+    
+    function handleNoteDrag(startPos, endPos) {
+        const startTick = startPos.tick;
+        const endTick = snapToGrid(getTickFromY(endPos.y));
+        if (startTick === endTick) {
+             handleNoteClick(startPos);
+             return;
+        }
+        const newNote = {
+            lane: startPos.lane,
+            tick: Math.min(startTick, endTick),
+            type: NOTE_TYPES.LONG,
+            duration: Math.abs(endTick - startTick)
+        };
+        const isOverlapping = chartData.notes.some(n => 
+             n.lane === newNote.lane &&
+             n.type !== NOTE_TYPES._BPM &&
+             Math.max(n.tick, newNote.tick) < Math.min(n.tick + (n.duration || 0), newNote.tick + newNote.duration)
+        );
+        if (!isOverlapping) {
+             chartData.notes.push(newNote);
+             sortEvents();
+             updateStats(); // 統計更新
+        }
+    }
+
+    function handleWheel(e) {
+        e.preventDefault();
+        if (e.ctrlKey || e.metaKey) {
+            const scrollRatio = editorContainer.scrollTop / (editorContainer.scrollHeight - editorContainer.clientHeight);
+            pixelsPerTick *= (1 - e.deltaY * 0.001);
+            pixelsPerTick = Math.max(0.005, Math.min(1, pixelsPerTick));
+            // Instead of full resize, we can just adjust a zoom factor and redraw
+            // For simplicity, we keep resize but it can be slow
+            resizeCanvas();
+            if (editorContainer.scrollHeight > editorContainer.clientHeight) {
+                editorContainer.scrollTop = scrollRatio * (editorContainer.scrollHeight - editorContainer.clientHeight);
+            }
+        } else {
+             editorContainer.scrollTop += e.deltaY;
+             if (!isPlaying) {
+                 audioPlayer.currentTime = scrollPositionToTime();
+             }
+        }
+    }
+    
+    function handleKeyDown(e) {
+         if (e.key === 'ArrowUp') {
+            gridIndex = Math.min(gridIndex + 1, gridDivisions.length - 1);
+            updateGridDisplay();
+         }
+         if (e.key === 'ArrowDown') {
+             gridIndex = Math.max(gridIndex - 1, 0);
+             updateGridDisplay();
+         }
+    }
+    
+    // --- ユーティリティ関数 ---
+    function getLaneFromX(x) { return Math.floor(x / laneWidth); }
+    function getTickFromY(mouseY) {
+        // スクロール位置を考慮せずに、マウスのY座標をそのまま使用
+        const tick = yToTick(mouseY);
+        return tick > 0 ? tick : 0;
+    }
+    function snapToGrid(tick) {
+        const snapValue = chartData.tpb / gridDivisions[gridIndex];
+        return Math.round(tick / snapValue) * snapValue;
+    }
+    function findEventAt(lane, tick) {
+        return chartData.notes.find(event =>
+            (event.type === NOTE_TYPES._BPM && Math.abs(event.tick - tick) < tickTolerance) ||
+            (event.lane === lane && Math.abs(event.tick - tick) < tickTolerance)
+        );
+    }
+    function sortEvents() { chartData.notes.sort((a, b) => a.tick - b.tick || a.lane - b.lane); }
+
+    function updateChartDataFromUI() {
+        chartData.title = titleInput.value;
+        chartData.bpm = parseFloat(bpmInput.value);
+        chartData.tpb = parseInt(tpbInput.value, 10);
+        chartData.offset = parseFloat(offsetInput.value);
+    }
+    
+    function updateUIFromChartData() {
+        titleInput.value = chartData.title;
+        bpmInput.value = chartData.bpm;
+        tpbInput.value = chartData.tpb;
+        offsetInput.value = chartData.offset;
+    }
+
+    function updateGridDisplay() {
+        const denominator = gridDivisions[gridIndex];
+        currentGridDisplay.textContent = `1/${denominator}`;
+    }
+
+    // --- 音声と時間変換 ---
+    function getBpmEvents() {
+        const bpmEvents = chartData.notes.filter(e => e.type === NOTE_TYPES._BPM);
+        return [{ tick: 0, bpm: chartData.bpm, time: chartData.offset }, ...bpmEvents].sort((a, b) => a.tick - b.tick);
+    }
+
+    function timeToTicks(targetTime) {
+        if (targetTime < chartData.offset) return 0;
+        const bpmEvents = getBpmEvents();
+        let currentTick = 0;
+        let currentTime = chartData.offset;
+        let currentBpm = chartData.bpm;
+
+        for (let i = 0; i < bpmEvents.length; i++) {
+            const event = bpmEvents[i];
+            const nextEvent = bpmEvents[i + 1];
+            
+            currentBpm = event.bpm;
+            
+            const timeAtNextEvent = nextEvent ? ticksToTime(nextEvent.tick) : Infinity;
+
+            if (targetTime <= timeAtNextEvent) {
+                const timeInSegment = targetTime - currentTime;
+                currentTick += (timeInSegment / 60) * currentBpm * chartData.tpb;
+                return currentTick;
+            } else {
+                const timeInSegment = timeAtNextEvent - currentTime;
+                currentTick += (timeInSegment / 60) * currentBpm * chartData.tpb;
+                currentTime = timeAtNextEvent;
+            }
+        }
+        return currentTick;
+    }
+
+    function ticksToTime(targetTicks) {
+        const bpmEvents = getBpmEvents();
+        let currentTime = chartData.offset;
+        let lastTick = 0;
+        let currentBpm = chartData.bpm;
+
+        for (const event of bpmEvents) {
+            if (targetTicks < event.tick) {
+                const ticksInSegment = targetTicks - lastTick;
+                currentTime += (ticksInSegment / (currentBpm * chartData.tpb)) * 60;
+                return currentTime;
+            }
+            const ticksInSegment = event.tick - lastTick;
+            currentTime += (ticksInSegment / (currentBpm * chartData.tpb)) * 60;
+            lastTick = event.tick;
+            currentBpm = event.bpm;
+        }
+        
+        const ticksAfterLastEvent = targetTicks - lastTick;
+        currentTime += (ticksAfterLastEvent / (currentBpm * chartData.tpb)) * 60;
+        return currentTime;
+    }
+    
+    function scrollPositionToTime() {
+        const judgementLineY = editorContainer.scrollTop + editorContainer.clientHeight - JUDGEMENT_LINE_OFFSET;
+        const tick = yToTick(judgementLineY);
+        return ticksToTime(tick);
+    }
+
+    function loadAudio(event) {
+        const file = event.target.files[0];
+        if (file) {
+            const url = URL.createObjectURL(file);
+            audioPlayer.src = url;
+            if (!titleInput.value || titleInput.value === 'test') {
+                 titleInput.value = file.name.replace(/\.[^/.]+$/, "");
+                 updateChartDataFromUI();
+            }
+        }
+    }
+    
+    function togglePlayback() {
+        if (!audioPlayer.src) return;
+        isPlaying = !isPlaying;
+        if (isPlaying) {
+            audioPlayer.play();
+            playPauseBtn.textContent = '一時停止';
+        } else {
+            audioPlayer.pause();
+            playPauseBtn.textContent = '再生';
+        }
+    }
+
+    function updateOnTimeUpdate() {
+        if (isDragging) return; // Don't update while user is dragging the seek bar
+        const time = audioPlayer.currentTime;
+        seekBar.value = time;
+        currentTimeDisplay.textContent = `${time.toFixed(2)} / ${(audioPlayer.duration || 0).toFixed(2)}`;
+        const currentTick = timeToTicks(time);
+        currentTickDisplay.textContent = Math.round(currentTick);
+    }
+    
+    // --- データ入出力 ---
+    function exportChartAsJSON() {
+        sortEvents();
+        updateChartDataFromUI();
+        const jsonString = JSON.stringify(chartData, null, 2);
+        const blob = new Blob([jsonString], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${chartData.title.replace(/ /g, '_')}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    function importChartFromJSON(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const importedData = JSON.parse(e.target.result);
+                if (typeof importedData.bpm !== 'number' || typeof importedData.tpb !== 'number' || !Array.isArray(importedData.notes)) {
+                    throw new Error('無効な譜面ファイル形式です。');
+                }
+                chartData = importedData;
+                updateUIFromChartData();
+                resizeCanvas();
+                editorContainer.scrollTop = editorContainer.scrollHeight - editorContainer.clientHeight;
+                updateStats(); // 統計更新
+                console.log('譜面を正常に読み込みました。');
+            } catch (error) {
+                console.error('譜ファイルの読み込みに失敗しました:', error);
+                alert('譜ファイルの読み込みに失敗しました。コンソールを確認してください。');
+            }
+        };
+        reader.readAsText(file);
+        event.target.value = null;
+    }
+
+    // 統計情報を更新する関数
+    function updateStats() {
+        const normalNotes = chartData.notes.filter(n => n.type === NOTE_TYPES.NORMAL);
+        const criticalNotes = chartData.notes.filter(n => n.type === NOTE_TYPES.CRITICAL);
+        const longNotes = chartData.notes.filter(n => n.type === NOTE_TYPES.LONG);
+        const bpmEvents = chartData.notes.filter(n => n.type === NOTE_TYPES._BPM);
+
+        // ノーマルノーツの統計
+        document.getElementById('normal-count').textContent = normalNotes.length;
+        document.getElementById('normal-lane-dist').textContent = 
+            getLaneDistribution(normalNotes);
+
+        // クリティカルノーツの統計
+        document.getElementById('critical-count').textContent = criticalNotes.length;
+        document.getElementById('critical-lane-dist').textContent = 
+            getLaneDistribution(criticalNotes);
+
+        // ロングノーツの統計
+        document.getElementById('long-count').textContent = longNotes.length;
+        document.getElementById('long-avg-length').textContent = 
+            Math.round(longNotes.reduce((sum, n) => sum + n.duration, 0) / (longNotes.length || 1));
+        document.getElementById('long-lane-dist').textContent = 
+            getLaneDistribution(longNotes);
+
+        // BPM変化の統計
+        document.getElementById('bpm-count').textContent = bpmEvents.length;
+        const bpms = bpmEvents.map(e => e.bpm);
+        document.getElementById('min-bpm').textContent = 
+            bpms.length ? Math.min(...bpms).toFixed(1) : chartData.bpm.toFixed(1);
+        document.getElementById('max-bpm').textContent = 
+            bpms.length ? Math.max(...bpms).toFixed(1) : chartData.bpm.toFixed(1);
+    }
+
+    // レーン分布を計算する関数
+    function getLaneDistribution(notes) {
+        const dist = new Array(LANES).fill(0);
+        notes.forEach(note => dist[note.lane]++);
+        return dist.map((count, i) => `${i}:${count}`).join(' ');
+    }
+
+    initialize();
+});
+</script>
+</body>
+</html>
