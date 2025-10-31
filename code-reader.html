@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="ja" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>QR Code Scanner</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Socket.io Client CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+    <!-- jsQR CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+
+
+    <style>
+        /* 画面全体、ダークモード、Interフォント */
+        body {
+            font-family: 'Inter', sans-serif;
+            overscroll-behavior: none; /* スワイプでの戻る/進むを無効化 */
+            user-select: none; /* テキスト選択を無効化 */
+            -webkit-tap-highlight-color: transparent; /* タップ時のハイライトを無効化 */
+        }
+        /* Tailwindフォント設定 */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        html {
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* 隠しCanvas (jsQRでの処理用) */
+        #qr-canvas {
+            display: none;
+        }
+
+        /* スキャン成功時のフラッシュアニメーション */
+        @keyframes scan-flash {
+            0%, 100% { background-color: #111827; } /* bg-gray-900 */
+            50% { background-color: #4ade80; } /* green-400 */
+        }
+        /* プレビューOFF時は背景を黒にするため、フラッシュも黒ベースに変更 */
+        body.preview-off.scan-success {
+            animation: scan-flash 0.3s ease-out;
+            animation-name: scan-flash-dark;
+        }
+        @keyframes scan-flash-dark {
+            0%, 100% { background-color: #000000; } /* black */
+            50% { background-color: #4ade80; } /* green-400 */
+        }
+
+
+        /* カスタムボタン (Tailwindのapplyの代わり) */
+        .btn {
+            @apply w-full px-4 py-3 rounded-lg text-white font-medium shadow-md transition-all duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 disabled:opacity-50 disabled:cursor-not-allowed;
+        }
+        .btn-green {
+            @apply bg-green-600 hover:bg-green-700 focus:ring-green-500;
+        }
+        .btn-blue {
+            @apply bg-blue-600 hover:bg-blue-700 focus:ring-blue-500;
+        }
+        .btn-gray {
+            @apply bg-gray-600 hover:bg-gray-700 focus:ring-gray-500;
+        }
+        .btn-yellow {
+            @apply bg-yellow-500 hover:bg-yellow-600 focus:ring-yellow-400 text-gray-900;
+        }
+    </style>
+</head>
+<body class="h-full bg-gray-900 text-white overflow-hidden">
+    <!-- スタンバイUIを削除し、スキャン中UIを常時表示 -->
+
+    <!-- 2. スキャン中UI -->
+    <div id="scanning-ui" class="h-full flex flex-col">
+        <!-- カメラプレビュー -->
+        <video id="video-preview" playsinline autoplay muted class="absolute top-0 left-0 w-full h-full object-cover -z-10"></video>
+        <!-- プレビューが見やすいようにオーバーレイを追加 -->
+        <div id="video-overlay" class="absolute top-0 left-0 w-full h-full bg-black bg-opacity-30 -z-10"></div>
+
+        <!-- コントロールエリア -->
+        <div id="controls-wrapper" class="w-full p-4 space-y-3 mt-auto bg-gray-900 bg-opacity-80 rounded-t-2xl shadow-lg backdrop-blur-sm">
+            
+            <!-- ステータス表示 -->
+            <div class="text-center p-2 rounded-lg bg-gray-800">
+                <p id="status-text" class="text-gray-400 text-sm font-medium truncate">初期化中...</p>
+            </div>
+
+            <!-- デバイス選択 -->
+            <div>
+                <label for="device-select" class="block text-sm font-medium text-gray-300 mb-1">デバイス:</label>
+                <select id="device-select" class="w-full p-3 rounded-lg bg-gray-700 border border-gray-600 text-white focus:outline-none focus:ring-2 focus:ring-cyan-500">
+                    <option value="">デバイスを読み込み中...</option>
+                </select>
+            </div>
+
+            <!-- 操作ボタン -->
+            <div class="grid grid-cols-2 gap-3">
+                <button id="light-toggle-btn" class="btn btn-gray" disabled>ライト ON</button>
+                <!-- 「スキャン停止」を「プレビューON/OFF」に変更 -->
+                <button id="preview-toggle-btn" class="btn btn-blue" disabled>プレビュー OFF</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- QRコード処理用キャンバス (非表示) -->
+    <canvas id="qr-canvas"></canvas>
+
+    <script type="module">
+        // --- グローバル変数 ---
+        let socket;
+        let isPreviewOn = true;  // プレビューがONかどうか (スキャンは常時)
+        let videoStream;        // カメラのストリーム
+        let lastScanData = null;  // 最後にスキャンしたデータ
+        let scanTimeout = null;   // 連続スキャン防止タイマー
+        let lightOn = false;      // ライトの状態
+        let isScanLoopActive = false; // スキャンループ(tick)が実行中か
+
+        // --- DOM要素キャッシュ ---
+        const video = document.getElementById('video-preview');
+        const videoOverlay = document.getElementById('video-overlay'); // オーバーレイをキャッシュ
+        const canvas = document.getElementById('qr-canvas');
+        const deviceSelect = document.getElementById('device-select');
+        const previewToggleBtn = document.getElementById('preview-toggle-btn'); // ボタンID変更
+        const lightToggleBtn = document.getElementById('light-toggle-btn');
+        const statusText = document.getElementById('status-text');
+
+        // --- 1. APIからデバイス一覧を取得 ---
+        async function fetchDevices() {
+            try {
+                const response = await fetch('/api/devices'); 
+                
+                if (!response.ok) {
+                    throw new Error(`API Error: ${response.status} ${response.statusText}`);
+                }
+                
+                const devices = await response.json();
+                
+                deviceSelect.innerHTML = ''; 
+                
+                if (devices.length === 0) {
+                    deviceSelect.innerHTML = '<option value="">利用可能なデバイス無し</option>';
+                    return;
+                }
+
+                deviceSelect.innerHTML = '<option value="">デバイスを選択してください</option>';
+                devices.forEach(device => {
+                    const displayName = device.name || device.macAddress || device.id;
+                    const option = document.createElement('option');
+                    option.value = device.id;
+                    option.textContent = displayName;
+                    deviceSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Failed to fetch devices:', error);
+                const errorMsg = 'デバイス取得失敗';
+                deviceSelect.innerHTML = `<option value="">${errorMsg}</option>`;
+                updateStatus(errorMsg, 'text-red-400');
+            }
+        }
+
+        // --- 2. Socket.io接続 ---
+        function connectSocket() {
+            socket = io({
+                reconnectionAttempts: 5,
+                reconnectionDelay: 3000
+            });
+
+            socket.on('connect', () => {
+                updateStatus('サーバー接続済', 'text-green-400');
+            });
+
+            socket.on('disconnect', () => {
+                updateStatus('サーバー切断', 'text-red-400');
+            });
+
+            socket.on('connect_error', (err) => {
+                console.error('Socket connection error:', err);
+                updateStatus('サーバー接続失敗', 'text-red-400');
+            });
+
+            // --- 3. Socket.ioイベント受信 (ライト制御) ---
+            socket.on('QRLightOn', () => {
+                console.log('Received QRLightOn');
+                toggleLight(true);
+            });
+
+            socket.on('QRLightOff', () => {
+                console.log('Received QRLightOff');
+                toggleLight(false);
+            });
+        }
+
+        // --- 4. スキャン開始/プレビュー制御 ---
+        
+        // デバイス選択時にスキャンを開始
+        deviceSelect.addEventListener('change', () => {
+            if (deviceSelect.value && !videoStream) {
+                // まだスキャンが開始されていなければ開始する
+                startScan();
+            } else if (deviceSelect.value) {
+                // 既に開始されている場合は、ステータスを更新
+                updateStatus('スキャン中...', 'text-cyan-400');
+            }
+        });
+
+        // プレビュー切り替えボタン
+        previewToggleBtn.addEventListener('click', () => {
+            togglePreview(!isPreviewOn);
+        });
+
+        // スキャン開始処理 (初回のみ)
+        async function startScan() {
+            // *** 変更点：jsQRがロードされているかチェック ***
+            if (typeof jsQR === 'undefined') {
+                console.error('jsQR library is not loaded yet. Retrying...');
+                updateStatus('ライブラリ読込中...再試行します', 'text-yellow-400');
+                // 1秒後に再試行
+                setTimeout(startScan, 1000);
+                return;
+            }
+            // *** 変更ここまで ***
+
+            if (!deviceSelect.value) {
+                updateStatus('デバイスを選択してください', 'text-yellow-400');
+                return;
+            }
+            if (videoStream) return; // 既に起動済みの場合は何もしない
+
+            try {
+                // 背面カメラ(environment)を優先して要求
+                videoStream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'environment',
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }
+                });
+                
+                video.srcObject = videoStream;
+                await video.play();
+
+                updateStatus('スキャン中...', 'text-cyan-400');
+                
+                // ライトボタンとプレビューボタンを有効化
+                checkLightCapability();
+                previewToggleBtn.disabled = false;
+                
+                // プレビューをデフォルトでON (表示)
+                togglePreview(true);
+                
+                // スキャンループを開始
+                if (!isScanLoopActive) {
+                    isScanLoopActive = true;
+                    requestAnimationFrame(tick);
+                }
+
+            } catch (err) {
+                console.error('Camera error:', err);
+                updateStatus('カメラ起動失敗', 'text-red-400');
+            }
+        }
+
+        // ライト利用可能かチェック
+        async function checkLightCapability() {
+            if (!videoStream) return;
+            try {
+                const track = videoStream.getVideoTracks()[0];
+                const capabilities = track.getCapabilities();
+                if (capabilities.torch) {
+                    lightToggleBtn.disabled = false;
+                } else {
+                    lightToggleBtn.disabled = true;
+                }
+            } catch (err) {
+                console.warn('Could not check torch capability:', err);
+                lightToggleBtn.disabled = true;
+            }
+        }
+
+        // プレビューの表示/非表示を切り替え
+        function togglePreview(show) {
+            isPreviewOn = show;
+            if (show) {
+                // プレビューON
+                video.style.display = 'block';
+                videoOverlay.style.display = 'block';
+                document.body.classList.remove('bg-black', 'preview-off');
+                document.body.classList.add('bg-gray-900');
+                previewToggleBtn.textContent = 'プレビュー OFF';
+                previewToggleBtn.classList.remove('btn-green');
+                previewToggleBtn.classList.add('btn-blue');
+                updateStatus('スキャン中...', 'text-cyan-400');
+            } else {
+                // プレビューOFF (焼き付き防止)
+                video.style.display = 'none';
+                videoOverlay.style.display = 'none';
+                document.body.classList.remove('bg-gray-900');
+                document.body.classList.add('bg-black', 'preview-off');
+                previewToggleBtn.textContent = 'プレビュー ON';
+                previewToggleBtn.classList.remove('btn-blue');
+                previewToggleBtn.classList.add('btn-green');
+                updateStatus('スキャン中 (プレビュー OFF)', 'text-gray-400');
+
+                // ライトが点灯していたら、プレビューOFFと同時に消灯する
+                if (lightOn) {
+                    toggleLight(false);
+                }
+            }
+        }
+
+        // --- 5. スキャンループ (tick) ---
+        function tick() {
+            // スキャンループは常に実行 (isScanLoopActiveがtrueの間)
+            
+            // *** 変更点：jsQRが未定義ならtickを中断（安全策） ***
+            if (typeof jsQR === 'undefined') {
+                console.error('jsQR not available in tick. Stopping loop.');
+                updateStatus('スキャンエラー(jsQR lost)', 'text-red-400');
+                isScanLoopActive = false; // ループを停止
+                return;
+            }
+            // *** 変更ここまで ***
+
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                const ctx = canvas.getContext('2d');
+                canvas.height = video.videoHeight;
+                canvas.width = video.videoWidth;
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                
+                const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                    inversionAttempts: 'dontInvert',
+                });
+
+                if (code && code.data && code.data !== lastScanData) {
+                    lastScanData = code.data; 
+                    
+                    const deviceId = deviceSelect.value;
+                    
+                    if (deviceId && socket && socket.connected) {
+                        // --- 6. Socket.io送信 ---
+                        socket.emit('QRScan', {
+                            deviceId: deviceId,
+                            data: code.data
+                        });
+                        
+                        const displayData = code.data.length > 30 ? `${code.data.substring(0, 30)}...` : code.data;
+                        updateStatus(`送信: ${displayData}`, 'text-green-400');
+                        
+                        document.body.classList.add('scan-success');
+                        setTimeout(() => document.body.classList.remove('scan-success'), 300);
+
+                        clearTimeout(scanTimeout);
+                        scanTimeout = setTimeout(() => {
+                            lastScanData = null;
+                            // プレビューがONの時だけステータスを「スキャン中」に戻す
+                            if (isPreviewOn) { 
+                                updateStatus('スキャン中...', 'text-cyan-400');
+                            } else {
+                                updateStatus('スキャン中 (プレビュー OFF)', 'text-gray-400');
+                            }
+                        }, 3000); 
+                        
+                    } else if (!deviceId) {
+                        updateStatus('デバイス未選択のため送信不可', 'text-yellow-400');
+                    } else if (!socket || !socket.connected) {
+                        updateStatus('サーバー未接続のため送信不可', 'text-red-400');
+                    }
+                }
+            }
+
+            // 次のフレームを要求
+            if (isScanLoopActive) { // isScanLoopActiveがtrueの場合のみ次を要求
+                requestAnimationFrame(tick);
+            }
+        }
+
+        // --- 7. ライト制御 ---
+        lightToggleBtn.addEventListener('click', () => {
+            // プレビューがOFFの時はライトを点灯させない
+            if (!isPreviewOn) {
+                updateStatus('プレビューONでライトが使えます', 'text-yellow-400');
+                return;
+            }
+            toggleLight(!lightOn);
+        });
+
+        async function toggleLight(newState) {
+            if (!videoStream || lightToggleBtn.disabled) return;
+            
+            // プレビューOFF時にライトをONにしようとしたらブロック
+            if (newState && !isPreviewOn) {
+                updateStatus('プレビューONでライトが使えます', 'text-yellow-400');
+                return;
+            }
+
+            const track = videoStream.getVideoTracks()[0];
+            
+            try {
+                await track.applyConstraints({
+                    advanced: [{ torch: newState }]
+                });
+                lightOn = newState;
+                updateLightButtonVisuals();
+            } catch (err) {
+                console.error('Torch error:', err);
+                updateStatus('ライト操作失敗', 'text-red-400');
+            }
+        }
+
+        // ライトボタンの見た目を更新
+        function updateLightButtonVisuals() {
+            if (lightOn) {
+                lightToggleBtn.textContent = 'ライト OFF';
+                lightToggleBtn.classList.remove('btn-gray');
+                lightToggleBtn.classList.add('btn-yellow');
+            } else {
+                lightToggleBtn.textContent = 'ライト ON';
+                lightToggleBtn.classList.add('btn-gray');
+                lightToggleBtn.classList.remove('btn-yellow');
+            }
+        }
+
+        // --- 共通ヘルパー ---
+        
+        // ステータス表示を更新
+        function updateStatus(message, className) {
+            statusText.textContent = message;
+            statusText.className = `${className} text-sm font-medium truncate`;
+        }
+
+        // --- 初期化処理 ---
+        document.addEventListener('DOMContentLoaded', async () => {
+            connectSocket();
+            await fetchDevices(); // デバイスリストを先に取得
+            updateStatus('デバイスを選択してください', 'text-yellow-400');
+            // デバイス選択時に startScan() が呼ばれる
+        });
+
+    </script>
+</body>
+</html>
